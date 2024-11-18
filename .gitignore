@@ -4,6 +4,7 @@ images/
 output.txt
 summary.txt
 .env
+*.pdf
 
 # Python
 __pycache__/
