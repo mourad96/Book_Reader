@@ -1,0 +1,6 @@
+pytesseract
+Pillow
+gTTS
+PyMuPDF
+python-dotenv
+requests
