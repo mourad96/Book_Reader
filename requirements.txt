@@ -4,3 +4,4 @@ gTTS
 PyMuPDF
 python-dotenv
 requests
+pydub

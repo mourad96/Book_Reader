@@ -15,6 +15,8 @@ A Python-based tool designed for processing and reading Arabic books in PDF form
 - Python 3.8+
 - Tesseract OCR engine installed
 - API credentials for the summarization service
+- ffmpeg installed
+
 
 ### Installing Tesseract OCR
 
@@ -34,6 +36,24 @@ sudo apt-get install tesseract-ocr-ara  # for Arabic language support
 ```bash
 brew install tesseract
 brew install tesseract-lang  # for additional language support
+```
+
+### Installing ffmpeg
+You may also need to install ffmpeg on your system:
+
+#### Windows
+```bash
+winget install ffmpeg
+```
+
+#### Linux
+```bash
+sudo apt-get install ffmpeg
+```
+
+#### Mac
+```bash
+brew install ffmpeg
 ```
 
 ## Installation

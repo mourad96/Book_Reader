@@ -26,7 +26,7 @@ class TextProcessor:
         submit_query_headers = {'apikey': self.api_key}
         submit_query_body = {
             "endpointId": "predefined-openai-gpt4o",
-            "query": f"Please summarize the following text:\n{text}",
+            "query": f"Please summarize the following text in arabic:\n{text}",
             "pluginIds": ["plugin-1712327325", "plugin-1713962163"],
             "responseMode": "sync"
         }
