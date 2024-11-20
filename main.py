@@ -7,7 +7,7 @@ from src.text_processor import TextProcessor
 from src.text_to_speech import TextToSpeech
 
 def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, api_key, external_user_id, 
-         start_page=None, end_page=None, summarize=False, generate_audio=False):
+         start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True):
     logging.basicConfig(level=logging.INFO)
     processor = ImageProcessor(tesseract_cmd)
     text_processor = TextProcessor(api_key, external_user_id)
@@ -22,14 +22,20 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
     output_dir = "./images"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Extract text from the specified range of the PDF
-    logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
-    extracted_text = processor.extract_text_from_pdf(
-        pdf_path=pdf_path, 
-        output_dir=output_dir, 
-        start_page=start_page, 
-        end_page=end_page
-    )
+    # Extract or reuse images based on the generate_img flag
+    if generate_img:
+        logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
+        extracted_text = processor.extract_text_from_pdf(
+            pdf_path=pdf_path, 
+            output_dir=output_dir, 
+            start_page=start_page, 
+            end_page=end_page
+        )
+    else:
+        # If skipping image generation, only extract text from existing images
+        logging.info("Skipping image generation. Extracting text from existing images...")
+        sorted_images = processor.get_sorted_image_files(output_dir)
+        extracted_text = processor.extract_text_from_images(sorted_images)
 
     # Save the extracted text
     with open(output_text_file, "w", encoding="utf-8") as f:
@@ -53,6 +59,7 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
         synthesizer.text_to_audio(extracted_text, audio_file)
         logging.info(f"Audio file saved to {audio_file}")
 
+
 if __name__ == "__main__":
     load_dotenv()
     
@@ -64,8 +71,9 @@ if __name__ == "__main__":
         tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         api_key=os.getenv("API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
-        start_page=320,
-        end_page=322,
-        summarize=True,
-        generate_audio=True
+        start_page=45,
+        end_page=54,
+        summarize=False,
+        generate_audio=False,
+        generate_img=False
     )
