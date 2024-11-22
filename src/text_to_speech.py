@@ -6,7 +6,6 @@ from pydub import AudioSegment
 from dotenv import load_dotenv
 import os
 
-
 class TextToSpeech:
     def __init__(self, language='ar', use_google=False):
         """
@@ -14,7 +13,7 @@ class TextToSpeech:
 
         Parameters:
         - language: Language code (default 'ar' for Arabic).
-        - use_google: If True, use Google Cloud Text-to-Speech API. Defaults to False (uses gTTS).
+        - use_google: If True, use Google Cloud Text-to-Speech API. Defaults to False (uses gTTS offline).
         """
         self.language = language
         self.use_google = use_google
@@ -35,10 +34,6 @@ class TextToSpeech:
     def _google_tts(self, text, output_path):
         """
         Use Google Cloud Text-to-Speech API for generating audio.
-
-        Parameters:
-        - text: Input text to convert to speech.
-        - output_path: Path to save the audio file.
         """
         try:
             # Load environment variables from .env file
@@ -61,7 +56,7 @@ class TextToSpeech:
 
             # Configure voice
             voice = texttospeech.VoiceSelectionParams(
-                language_code="ar-XA",  # Replace with preferred dialect
+                language_code="ar-XA",
                 ssml_gender=texttospeech.SsmlVoiceGender.MALE,
             )
 
@@ -74,55 +69,70 @@ class TextToSpeech:
             # Save the audio file
             with open(output_path, "wb") as out:
                 out.write(response.audio_content)
-            print(f"Audio saved to {output_path} using Google Cloud TTS.")
+            logging.info(f"Audio saved to {output_path} using Google Cloud TTS.")
         except Exception as e:
             logging.error(f"Google Cloud TTS failed: {e}")
+            raise
 
-    def text_to_audio(self, text, output_path, chunk_size=4500):
+    def _gtts_offline(self, text, output_path, chunk_size=4500):
         """
-        Convert text to audio, handling text longer than Google TTS limits.
+        Use gTTS offline to convert text to speech.
 
         Parameters:
         - text: Input text to convert to speech.
-        - output_path: Path to save the combined audio file.
-        - chunk_size: Maximum byte size for each TTS request (default: 4500).
+        - output_path: Path to save the audio file.
+        - chunk_size: Maximum characters per request (default: 4500).
         """
         try:
             # Preprocess and chunk the text
             chunks = []
-            current_chunk = ""
+            processed_text = self._preprocess_text(text)
 
-            for word in text.split():
-                if len((current_chunk + " " + word).encode("utf-8")) > chunk_size:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = word
-                else:
-                    current_chunk += " " + word
+            while processed_text:
+                if len(processed_text) <= chunk_size:
+                    chunks.append(processed_text)
+                    break
+                split_point = processed_text.rfind(' ', 0, chunk_size)
+                if split_point == -1:
+                    split_point = chunk_size
+                chunks.append(processed_text[:split_point])
+                processed_text = processed_text[split_point:].strip()
 
-            if current_chunk:
-                chunks.append(current_chunk.strip())
+            # Generate audio for each chunk
+            if len(chunks) == 1:
+                tts = gTTS(text=chunks[0], lang=self.language, slow=False)
+                tts.save(output_path)
+            else:
+                audio_segments = []
+                for i, chunk in enumerate(chunks):
+                    chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
+                    tts = gTTS(text=chunk, lang=self.language, slow=False)
+                    tts.save(chunk_path)
+                    audio_segments.append(AudioSegment.from_mp3(chunk_path))
 
-            logging.info(f"Split text into {len(chunks)} chunks for processing.")
+                # Combine all audio segments into one file
+                combined = sum(audio_segments)
+                combined.export(output_path, format="mp3")
 
-            # Process each chunk and save audio
-            audio_segments = []
-            for i, chunk in enumerate(chunks):
-                chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
-                self._google_tts(chunk, chunk_path)
-                audio_segments.append(AudioSegment.from_mp3(chunk_path))
+                # Clean up temporary chunk files
+                for i in range(len(chunks)):
+                    os.remove(f"{output_path.rsplit('.', 1)[0]}_{i}.mp3")
 
-            # Combine all audio segments into one file
-            combined = sum(audio_segments)
-            combined.export(output_path, format="mp3")
-
-            # Clean up temporary chunk files
-            for i in range(len(chunks)):
-                chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
-                if os.path.exists(chunk_path):
-                    os.remove(chunk_path)
-
-            logging.info(f"Combined audio saved to {output_path}")
-
+            logging.info(f"Audio saved to {output_path} using gTTS offline.")
         except Exception as e:
-            logging.error(f"Failed to generate audio: {e}")
+            logging.error(f"gTTS offline TTS failed: {e}")
             raise
+
+    def text_to_audio(self, text, output_path, chunk_size=4500):
+        """
+        Convert text to speech using the selected TTS method (Google Cloud or gTTS offline).
+
+        Parameters:
+        - text: Input text to convert to speech.
+        - output_path: Path to save the combined audio file.
+        - chunk_size: Maximum byte size for each request (default: 4500).
+        """
+        if self.use_google:
+            self._google_tts(text, output_path)
+        else:
+            self._gtts_offline(text, output_path, chunk_size=chunk_size)

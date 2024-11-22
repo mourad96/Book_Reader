@@ -8,11 +8,11 @@ from src.text_to_speech import TextToSpeech
 from ar_corrector.corrector import Corrector
 
 def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, api_key, external_user_id, 
-         start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True):
+         start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True, extract_txt=False):
     logging.basicConfig(level=logging.INFO)
     processor = ImageProcessor(tesseract_cmd)
     text_processor = TextProcessor(api_key, external_user_id)
-    synthesizer = TextToSpeech(use_google=True) #change it to false if you want to use offline gtts
+    synthesizer = TextToSpeech(use_google=False) #change it to false if you want to use offline gtts
     corr = Corrector()
 
     # Ensure file_dir contains only one PDF to process
@@ -24,29 +24,42 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
     output_dir = "./images"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Extract or reuse images based on the generate_img flag
-    if generate_img:
-        logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
-        extracted_text = processor.extract_text_from_pdf(
-            pdf_path=pdf_path, 
-            output_dir=output_dir, 
-            start_page=start_page, 
-            end_page=end_page
-        )
-    else:
-        # If skipping image generation, only extract text from existing images
-        logging.info("Skipping image generation. Extracting text from existing images...")
-        sorted_images = processor.get_sorted_image_files(output_dir)
-        extracted_text = processor.extract_text_from_images(sorted_images)
+    # Initialize extracted_text
+    extracted_text = None
 
-    # Save the extracted text
-    ctext = corr.contextual_correct(extracted_text)
-    with open(output_text_file, "w", encoding="utf-8") as f:
-        f.write(ctext)
-    logging.info(f"Extracted text saved to {output_text_file}")
+    if extract_txt:
+        # Extract text if the option is enabled
+        if generate_img:
+            logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
+            extracted_text = processor.extract_text_from_pdf(
+                pdf_path=pdf_path,
+                output_dir=output_dir,
+                start_page=start_page,
+                end_page=end_page
+            )
+        else:
+            logging.info("Skipping image generation. Extracting text from existing images...")
+            sorted_images = processor.get_sorted_image_files(output_dir)
+            extracted_text = processor.extract_text_from_images(sorted_images)
+
+        # Apply contextual correction if text was extracted
+        if extracted_text:
+            extracted_text = corr.contextual_correct(extracted_text)
+            with open(output_text_file, "w", encoding="utf-8") as f:
+                f.write(extracted_text)
+            logging.info(f"Extracted text saved to {output_text_file}")
+    else:
+        # Read the text directly from the existing output.txt file
+        if os.path.exists(output_text_file):
+            with open(output_text_file, "r", encoding="utf-8") as f:
+                extracted_text = f.read()
+            logging.info(f"Using text from existing file: {output_text_file}")
+        else:
+            raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
 
     # Summarize text if the option is enabled
-    if summarize:
+    summarized_text = None
+    if summarize and extracted_text:
         logging.info("Summarizing the extracted text...")
         summarized_text = text_processor.summarize_text(extracted_text)
 
@@ -58,8 +71,8 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
         summarized_text = extracted_text
 
     # Convert text to audio if the option is enabled
-    if generate_audio:
-        synthesizer.text_to_audio(extracted_text, audio_file)
+    if generate_audio and summarized_text:
+        synthesizer.text_to_audio(summarized_text, audio_file)
         logging.info(f"Audio file saved to {audio_file}")
 
 
@@ -74,9 +87,10 @@ if __name__ == "__main__":
         tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         api_key=os.getenv("API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
-        start_page=44,
-        end_page=54,
+        start_page=7,
+        end_page=10,
         summarize=False,
         generate_audio=True,
-        generate_img=False
+        generate_img=False,
+        extract_txt=False
     )
