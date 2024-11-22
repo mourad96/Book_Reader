@@ -1,7 +1,8 @@
-pytesseract
-Pillow
-gTTS
-PyMuPDF
-python-dotenv
-requests
-pydub
+pytesseract==0.3.10
+Pillow==9.4.0
+gTTS==2.3.2
+PyMuPDF==1.22.5
+python-dotenv==1.0.0
+requests==2.31.0
+pydub==0.25.1
+google-cloud-texttospeech==2.13.1
