@@ -5,15 +5,18 @@ from dotenv import load_dotenv
 from src.image_processor import ImageProcessor
 from src.text_processor import TextProcessor
 from src.text_to_speech import TextToSpeech
+from src.text_reformulation import TextCorrector
 from ar_corrector.corrector import Corrector
 
 def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, api_key, external_user_id, 
-         start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True, extract_txt=False):
+         start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True, extract_txt=False, correct_text=False):
     logging.basicConfig(level=logging.INFO)
     processor = ImageProcessor(tesseract_cmd)
     text_processor = TextProcessor(api_key, external_user_id)
-    synthesizer = TextToSpeech(use_google=False) #change it to false if you want to use offline gtts
+    synthesizer = TextToSpeech(use_google=True) #change it to false if you want to use offline gtts
     corr = Corrector()
+    OpenAicorrector = TextCorrector()
+    
 
     # Ensure file_dir contains only one PDF to process
     pdf_files = [f for f in os.listdir(file_dir) if f.endswith('.pdf')]
@@ -57,22 +60,36 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
         else:
             raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
 
+    # Process the text with OpenAI API
+    if correct_text:
+        logging.info("Processing text through OpenAI API for linguistic and grammatical corrections...")
+        OpenAicorrector.process_text_with_openai()
+
+    # Read the corrected text from the output_corrected.txt file
+    corrected_text = None
+    if correct_text and (summarize or generate_audio):
+        try:
+            with open("output_corrected.txt", "r", encoding="utf-8") as corrected_file:
+                corrected_text = corrected_file.read()
+            logging.info("Successfully read the corrected text from output_corrected.txt")
+        except FileNotFoundError:
+            logging.error("The file output_corrected.txt does not exist. Please ensure the text correction process is completed.")
+            corrected_text = None
+    
     # Summarize text if the option is enabled
     summarized_text = None
-    if summarize and extracted_text:
-        logging.info("Summarizing the extracted text...")
-        summarized_text = text_processor.summarize_text(extracted_text)
+    if summarize and corrected_text:
+        logging.info("Summarizing the extracted corrected_text...")
+        summarized_text = text_processor.summarize_text(corrected_text)
 
         # Save the summarized text
         with open(summary_file, "w", encoding="utf-8") as f:
             f.write(summarized_text)
         logging.info(f"Summarized text saved to {summary_file}")
-    else:
-        summarized_text = extracted_text
 
     # Convert text to audio if the option is enabled
-    if generate_audio and summarized_text:
-        synthesizer.text_to_audio(summarized_text, audio_file)
+    if generate_audio and corrected_text:
+        synthesizer.text_to_audio(corrected_text, audio_file)
         logging.info(f"Audio file saved to {audio_file}")
 
 
@@ -87,10 +104,11 @@ if __name__ == "__main__":
         tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         api_key=os.getenv("API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
-        start_page=7,
-        end_page=10,
+        start_page=13,
+        end_page=27,
         summarize=False,
-        generate_audio=True,
+        generate_audio=False,
         generate_img=False,
-        extract_txt=False
+        extract_txt=False,
+        correct_text=True
     )

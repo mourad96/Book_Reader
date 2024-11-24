@@ -6,6 +6,7 @@ from pydub import AudioSegment
 from dotenv import load_dotenv
 import os
 
+
 class TextToSpeech:
     def __init__(self, language='ar', use_google=False):
         """
@@ -26,14 +27,19 @@ class TextToSpeech:
         3. Remove unnecessary punctuation that might cause pauses.
         """
         text = re.sub(r'\s+', ' ', text)  # Normalize spaces
-        text = text.replace('؛', ',')    # Replace Arabic semicolon with comma
+        text = text.replace('؛', ',')    # Replace Arabic semicolon with a comma
         text = text.replace('»', '').replace('«', '')  # Remove quotes
         text = re.sub(r'\n\n', '. ', text).replace('\n', ' ')  # Normalize newlines
         return text.strip()
 
-    def _google_tts(self, text, output_path):
+    def _google_tts(self, text, output_path, chunk_size=5000):
         """
         Use Google Cloud Text-to-Speech API for generating audio.
+
+        Parameters:
+        - text: Input text to convert to speech.
+        - output_path: Path to save the audio file.
+        - chunk_size: Maximum byte size for each request.
         """
         try:
             # Load environment variables from .env file
@@ -51,25 +57,49 @@ class TextToSpeech:
             # Initialize Google Cloud TTS client
             client = texttospeech.TextToSpeechClient()
 
-            # Set up the text input
-            input_text = texttospeech.SynthesisInput(text=text)
+            # Preprocess and split text into chunks by byte size
+            processed_text = self._preprocess_text(text)
+            chunks = []
+            current_chunk = ""
 
-            # Configure voice
-            voice = texttospeech.VoiceSelectionParams(
-                language_code="ar-XA",
-                ssml_gender=texttospeech.SsmlVoiceGender.MALE,
-            )
+            for word in processed_text.split():
+                if len((current_chunk + " " + word).encode("utf-8")) > chunk_size:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = word
+                else:
+                    current_chunk += " " + word
 
-            # Configure audio output
-            audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+            if current_chunk:
+                chunks.append(current_chunk.strip())
 
-            # Generate the speech
-            response = client.synthesize_speech(input=input_text, voice=voice, audio_config=audio_config)
+            logging.info(f"Split text into {len(chunks)} chunks for processing.")
 
-            # Save the audio file
-            with open(output_path, "wb") as out:
-                out.write(response.audio_content)
-            logging.info(f"Audio saved to {output_path} using Google Cloud TTS.")
+            # Process each chunk and save audio
+            audio_segments = []
+            for i, chunk in enumerate(chunks):
+                input_text = texttospeech.SynthesisInput(text=chunk)
+                voice = texttospeech.VoiceSelectionParams(
+                    language_code="ar-XA",
+                    ssml_gender=texttospeech.SsmlVoiceGender.MALE,
+                )
+                audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+                response = client.synthesize_speech(input=input_text, voice=voice, audio_config=audio_config)
+
+                # Save each chunk as a temporary file
+                chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
+                with open(chunk_path, "wb") as out:
+                    out.write(response.audio_content)
+                audio_segments.append(AudioSegment.from_mp3(chunk_path))
+
+            # Combine all audio segments into one file
+            combined = sum(audio_segments)
+            combined.export(output_path, format="mp3")
+
+            # Clean up temporary chunk files
+            for i in range(len(chunks)):
+                os.remove(f"{output_path.rsplit('.', 1)[0]}_{i}.mp3")
+
+            logging.info(f"Combined audio saved to {output_path} using Google Cloud TTS.")
         except Exception as e:
             logging.error(f"Google Cloud TTS failed: {e}")
             raise
@@ -123,16 +153,16 @@ class TextToSpeech:
             logging.error(f"gTTS offline TTS failed: {e}")
             raise
 
-    def text_to_audio(self, text, output_path, chunk_size=4500):
+    def text_to_audio(self, text, output_path, chunk_size=5000):
         """
         Convert text to speech using the selected TTS method (Google Cloud or gTTS offline).
 
         Parameters:
         - text: Input text to convert to speech.
         - output_path: Path to save the combined audio file.
-        - chunk_size: Maximum byte size for each request (default: 4500).
+        - chunk_size: Maximum byte size for each request (default: 5000 for Google TTS).
         """
         if self.use_google:
-            self._google_tts(text, output_path)
+            self._google_tts(text, output_path, chunk_size=chunk_size)
         else:
             self._gtts_offline(text, output_path, chunk_size=chunk_size)

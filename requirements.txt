@@ -6,3 +6,4 @@ python-dotenv==1.0.0
 requests==2.31.0
 pydub==0.25.1
 google-cloud-texttospeech==2.13.1
+openai
