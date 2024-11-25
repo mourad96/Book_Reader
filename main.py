@@ -12,7 +12,7 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
     logging.basicConfig(level=logging.INFO)
     processor = ImageProcessor(tesseract_cmd)
     text_processor = TextProcessor(api_key, external_user_id)
-    synthesizer = TextToSpeech(use_google=False) #change it to false if you want to use offline gtts
+    synthesizer = TextToSpeech(use_google=True) #change it to false if you want to use offline gtts
     corr = Corrector()
 
     # Ensure file_dir contains only one PDF to process
