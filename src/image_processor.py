@@ -5,6 +5,9 @@ from PIL import Image
 import fitz
 import cv2
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+import time
+
 
 class ImageProcessor:
     def __init__(self, tesseract_cmd):
@@ -135,15 +138,41 @@ class ImageProcessor:
         sorted_files = sorted(files, key=extract_numeric_prefix)
         return [os.path.join(directory, filename) for filename in sorted_files]
 
+    def extract_text_from_image(self, image_path, lang='ara'):
+        try:
+            return pytesseract.image_to_string(Image.open(image_path), lang=lang, config="--psm 6")
+        except Exception as e:
+            logging.error(f"Failed to process {image_path}: {e}")
+            return ""
+
+
     def extract_text_from_images(self, image_files, lang='ara'):
-        """Extract text from a list of sorted image files."""
-        text = ""
-        for image_path in image_files:
-            try:
-                text += pytesseract.image_to_string(Image.open(image_path), lang=lang, config="--psm 6")
-            except Exception as e:
-                logging.error(f"Failed to process {image_path}: {e}")
+        """Extract text from a list of sorted image files and measure execution time."""
+        start_time = time.time()
+
+        with ThreadPoolExecutor() as executor:
+            results = executor.map(lambda img: self.extract_text_from_image(img, lang), image_files)
+        text = "".join(results)
+
+        end_time = time.time()
+        logging.info(f"Execution time for extract_text_from_images: {end_time - start_time:.2f} seconds")
+
         return text
+
+
+    # def extract_text_from_images(self, image_files, lang='ara'):
+    #     """Extract text from a list of sorted image files."""
+    #     text = ""
+    #     start_time = time.time()
+    
+    #     for image_path in image_files:
+    #         try:
+    #             text += pytesseract.image_to_string(Image.open(image_path), lang=lang, config="--psm 6")
+    #         except Exception as e:
+    #             logging.error(f"Failed to process {image_path}: {e}")
+    #     end_time = time.time()
+    #     logging.info(f"Execution time for extract_text_from_images: {end_time - start_time:.2f} seconds")
+    #     return text
 
     def extract_text_from_pdf(self, pdf_path, output_dir, start_page=1, end_page=None, lang='ara'):
         """Convert a range of pages from a PDF to cropped images and extract text."""

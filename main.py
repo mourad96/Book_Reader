@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from src.image_processor import ImageProcessor
 from src.text_processor import TextProcessor
 from src.text_to_speech import TextToSpeech
-from ar_corrector.corrector import Corrector
 
 def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, api_key, external_user_id, 
          start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True, extract_txt=False):
@@ -13,7 +12,6 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
     processor = ImageProcessor(tesseract_cmd)
     text_processor = TextProcessor(api_key, external_user_id)
     synthesizer = TextToSpeech(use_google=True) #change it to false if you want to use offline gtts
-    corr = Corrector()
 
     # Ensure file_dir contains only one PDF to process
     pdf_files = [f for f in os.listdir(file_dir) if f.endswith('.pdf')]
@@ -44,7 +42,7 @@ def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, ap
 
         # Apply contextual correction if text was extracted
         if extracted_text:
-            extracted_text = corr.contextual_correct(extracted_text)
+            #extracted_text = corr.contextual_correct(extracted_text)
             with open(output_text_file, "w", encoding="utf-8") as f:
                 f.write(extracted_text)
             logging.info(f"Extracted text saved to {output_text_file}")
@@ -87,8 +85,8 @@ if __name__ == "__main__":
         tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         api_key=os.getenv("API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
-        start_page=7,
-        end_page=10,
+        start_page=76,
+        end_page=98,
         summarize=False,
         generate_audio=True,
         generate_img=False,
