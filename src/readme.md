@@ -5,15 +5,13 @@ This module provides functionality for processing PDFs and extracting text from 
 ## Features
 - Convert PDF pages to cropped images.
 - Detect and crop footer regions dynamically using Hough Line Transform and adaptive thresholding.
-- Extract text from images using Tesseract OCR.
+- Extract text from images using Google Gemini Vision.
 - Process a range of PDF pages and save the output in a specified directory.
 
 ## Installation
 1. Ensure the correct installation of dependencies:
-   - `pytesseract` with a valid Tesseract-OCR installation.
-   - `PyMuPDF` (`fitz`), `Pillow`, and `OpenCV`.
+   - `google-generativeai`, `PyMuPDF` (`fitz`), `Pillow`, and `OpenCV`.
 
-2. Configure `tesseract_cmd` to point to your Tesseract installation path.
 
 ## Usage Instructions
 1. **PDF to Cropped Images**:

@@ -1,17 +1,20 @@
 import os
 import logging
-import pytesseract
+import google.generativeai as genai
 from PIL import Image
 import fitz
 import cv2
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import time
+import base64
+import io
 
 
 class ImageProcessor:
-    def __init__(self, tesseract_cmd):
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    def __init__(self, api_key):
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     def convert_pdf_to_cropped_images(self, pdf_path, output_dir, start_page=1, end_page=None, dpi=300):
         """Convert PDF to cropped images and detect footer lines dynamically."""
@@ -119,9 +122,6 @@ class ImageProcessor:
         cropped_image = Image.open(image_path).crop(crop_region)
         return cropped_image
 
-
-
-
     @staticmethod
     def get_sorted_image_files(directory):
         """Fetch and sort image files by numeric prefix."""
@@ -139,12 +139,30 @@ class ImageProcessor:
         return [os.path.join(directory, filename) for filename in sorted_files]
 
     def extract_text_from_image(self, image_path, lang='ara'):
+        """Extract text from an image using Google Gemini Vision."""
         try:
-            return pytesseract.image_to_string(Image.open(image_path), lang=lang, config="--psm 6")
+            # Open and prepare the image
+            with Image.open(image_path) as img:
+                # Convert image to bytes
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format=img.format or 'PNG')
+                img_byte_arr = img_byte_arr.getvalue()
+
+            # Create prompt for text extraction
+            prompt = f"Extract all text from this image. The text is in {lang} language. Output only the extracted text, without any additional commentary."
+
+            # Generate content using Gemini
+            response = self.model.generate_content([
+                prompt,
+                {"mime_type": "image/jpeg", "data": img_byte_arr}
+            ])
+            
+            # Get the extracted text
+            return response.text.strip()
+            
         except Exception as e:
             logging.error(f"Failed to process {image_path}: {e}")
             return ""
-
 
     def extract_text_from_images(self, image_files, lang='ara'):
         """Extract text from a list of sorted image files and measure execution time."""
@@ -158,21 +176,6 @@ class ImageProcessor:
         logging.info(f"Execution time for extract_text_from_images: {end_time - start_time:.2f} seconds")
 
         return text
-
-
-    # def extract_text_from_images(self, image_files, lang='ara'):
-    #     """Extract text from a list of sorted image files."""
-    #     text = ""
-    #     start_time = time.time()
-    
-    #     for image_path in image_files:
-    #         try:
-    #             text += pytesseract.image_to_string(Image.open(image_path), lang=lang, config="--psm 6")
-    #         except Exception as e:
-    #             logging.error(f"Failed to process {image_path}: {e}")
-    #     end_time = time.time()
-    #     logging.info(f"Execution time for extract_text_from_images: {end_time - start_time:.2f} seconds")
-    #     return text
 
     def extract_text_from_pdf(self, pdf_path, output_dir, start_page=1, end_page=None, lang='ara'):
         """Convert a range of pages from a PDF to cropped images and extract text."""
