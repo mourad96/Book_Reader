@@ -7,14 +7,13 @@ import cv2
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import time
-import base64
 import io
 
 
 class ImageProcessor:
     def __init__(self, api_key):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = "gemini-2.5-flash"
 
     def convert_pdf_to_cropped_images(self, pdf_path, output_dir, start_page=1, end_page=None, dpi=300):
         """Convert PDF to cropped images and detect footer lines dynamically."""
@@ -151,14 +150,18 @@ class ImageProcessor:
             # Create prompt for text extraction
             prompt = f"Extract all text from this image. The text is in {lang} language. Output only the extracted text, without any additional commentary."
 
-            # Generate content using Gemini
-            response = self.model.generate_content([
-                prompt,
-                {"mime_type": "image/jpeg", "data": img_byte_arr}
-            ])
-            
-            # Get the extracted text
-            return response.text.strip()
+            # Generate content using the Gemini chat API
+            response = genai.chat.create(
+                model=self.model,
+                messages=[{
+                    "author": "user",
+                    "content": prompt,
+                }],
+                image=[{"mime_type": "image/png", "data": img_byte_arr}]
+            )
+
+            # Get the extracted text from the chat response
+            return response.choices[0].message.content.strip()
             
         except Exception as e:
             logging.error(f"Failed to process {image_path}: {e}")

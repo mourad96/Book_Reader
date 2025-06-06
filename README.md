@@ -5,7 +5,7 @@ A Python-based tool designed for processing and reading Arabic books in PDF form
 ## Features
 
 - PDF to image conversion
-- OCR text extraction (supports Arabic)
+- OCR text extraction using Google Gemini Vision (supports Arabic)
 - Text summarization via external API
 - Text-to-speech conversion
 - Configurable page range processing
@@ -127,3 +127,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - [PyMuPDF](https://github.com/pymupdf/PyMuPDF)
 - [gTTS](https://github.com/pndurette/gTTS)
+- [Google Generative AI](https://ai.google)
