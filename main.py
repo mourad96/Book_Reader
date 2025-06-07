@@ -82,12 +82,12 @@ if __name__ == "__main__":
         output_text_file="output.txt",
         summary_file="summary.txt",
         audio_file="output.mp3",
-        api_key=os.getenv("API_KEY"),
+        api_key=os.getenv("GEMINI_API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
         start_page=76,
         end_page=98,
         summarize=False,
-        generate_audio=True,
+        generate_audio=False,
         generate_img=False,
-        extract_txt=False
+        extract_txt=True
     )
