@@ -6,10 +6,10 @@ from src.image_processor import ImageProcessor
 from src.text_processor import TextProcessor
 from src.text_to_speech import TextToSpeech
 
-def main(file_dir, output_text_file, summary_file, audio_file, tesseract_cmd, api_key, external_user_id, 
+def main(file_dir, output_text_file, summary_file, audio_file, api_key, external_user_id,
          start_page=None, end_page=None, summarize=False, generate_audio=False, generate_img=True, extract_txt=False):
     logging.basicConfig(level=logging.INFO)
-    processor = ImageProcessor(tesseract_cmd)
+    processor = ImageProcessor(api_key)
     text_processor = TextProcessor(api_key, external_user_id)
     synthesizer = TextToSpeech(use_google=True) #change it to false if you want to use offline gtts
 
@@ -82,13 +82,12 @@ if __name__ == "__main__":
         output_text_file="output.txt",
         summary_file="summary.txt",
         audio_file="output.mp3",
-        tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        api_key=os.getenv("API_KEY"),
+        api_key=os.getenv("GEMINI_API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
         start_page=76,
         end_page=98,
         summarize=False,
-        generate_audio=True,
+        generate_audio=False,
         generate_img=False,
-        extract_txt=False
+        extract_txt=True
     )

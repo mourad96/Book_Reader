@@ -5,7 +5,7 @@ A Python-based tool designed for processing and reading Arabic books in PDF form
 ## Features
 
 - PDF to image conversion
-- OCR text extraction (supports Arabic)
+- OCR text extraction using Google Gemini Vision (supports Arabic)
 - Text summarization via external API
 - Text-to-speech conversion
 - Configurable page range processing
@@ -13,30 +13,11 @@ A Python-based tool designed for processing and reading Arabic books in PDF form
 ## Prerequisites
 
 - Python 3.8+
-- Tesseract OCR engine installed
 - API credentials for the summarization service
+- Google Generative AI API key
 - ffmpeg installed
 
 
-### Installing Tesseract OCR
-
-#### Windows
-1. Download the installer from [Tesseract GitHub](https://github.com/UB-Mannheim/tesseract/wiki)
-2. Run the installer
-3. Add Tesseract to your system PATH or specify the path in the code
-
-#### Linux
-```bash
-sudo apt-get update
-sudo apt-get install tesseract-ocr
-sudo apt-get install tesseract-ocr-ara  # for Arabic language support
-```
-
-#### Mac
-```bash
-brew install tesseract
-brew install tesseract-lang  # for additional language support
-```
 
 ### Installing ffmpeg
 You may also need to install ffmpeg on your system:
@@ -77,7 +58,7 @@ pip install -r requirements.txt
 
 4. Create a `.env` file in the root directory with your API credentials from [app.on-demand.io](https://app.on-demand.io):
 ```env
-API_KEY=your_api_key_here            # from app.on-demand.io
+API_KEY=your_api_key_here            # used for OCR and summarization
 EXTERNAL_USER_ID=your_external_user_id_here  # from app.on-demand.io
 ```
 
@@ -102,7 +83,6 @@ main(
     output_text_file="output.txt",    # Output file for extracted text
     summary_file="summary.txt",       # Output file for summary
     audio_file="output.mp3",          # Output audio file
-    tesseract_cmd="path/to/tesseract",# Path to Tesseract executable
     start_page=1,                     # Starting page number
     end_page=None,                    # Ending page number (None for all pages)
     summarize=True,                   # Enable/disable summarization
@@ -145,6 +125,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
 - [PyMuPDF](https://github.com/pymupdf/PyMuPDF)
 - [gTTS](https://github.com/pndurette/gTTS)
+- [Google Generative AI](https://ai.google)
