@@ -165,8 +165,11 @@ class ImageProcessor:
 
         return text
 
-    def extract_text_from_pdf(self, pdf_path, output_dir, start_page=1, end_page=None, lang='ara'):
-        """Convert a range of pages from a PDF to cropped images and extract text."""
+    def extract_text_from_pdf(self, pdf_path, output_dir, start_page=1, end_page=None, lang='ara', extract_text=True):
+        """Convert a range of pages from a PDF to cropped images and optionally extract text."""
         self.convert_pdf_to_cropped_images(pdf_path, output_dir, start_page, end_page)
-        sorted_images = self.get_sorted_image_files(output_dir)
-        return self.extract_text_from_images(sorted_images, lang)
+        
+        if extract_text:
+            sorted_images = self.get_sorted_image_files(output_dir)
+            return self.extract_text_from_images(sorted_images, lang)
+        return None
