@@ -22,30 +22,31 @@ def main(file_dir, output_text_file, summary_file, audio_file, api_key, external
     output_dir = "./images"
     os.makedirs(output_dir, exist_ok=True)
 
+    # Handle image generation independently
+    if generate_img:
+        logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
+        processor.extract_text_from_pdf(
+            pdf_path=pdf_path,
+            output_dir=output_dir,
+            start_page=start_page,
+            end_page=end_page,
+            extract_text=False  # Only generate images without text extraction
+        )
+        logging.info("Image generation completed")
+
     # Initialize extracted_text
     extracted_text = None
 
     if extract_txt:
-        # Extract text if the option is enabled
-        if generate_img:
-            logging.info(f"Processing PDF: {pdf_path}, Pages: {start_page}-{end_page}")
-            extracted_text = processor.extract_text_from_pdf(
-                pdf_path=pdf_path,
-                output_dir=output_dir,
-                start_page=start_page,
-                end_page=end_page
-            )
-        else:
-            logging.info("Skipping image generation. Extracting text from existing images...")
-            sorted_images = processor.get_sorted_image_files(output_dir)
-            extracted_text = processor.extract_text_from_images(sorted_images)
+        # Extract text from images
+        logging.info("Extracting text from images...")
+        sorted_images = processor.get_sorted_image_files(output_dir)
+        extracted_text = processor.extract_text_from_images(sorted_images)
 
-        # Apply contextual correction if text was extracted
-        if extracted_text:
-            #extracted_text = corr.contextual_correct(extracted_text)
-            with open(output_text_file, "w", encoding="utf-8") as f:
-                f.write(extracted_text)
-            logging.info(f"Extracted text saved to {output_text_file}")
+        # Save the extracted text
+        with open(output_text_file, "w", encoding="utf-8") as f:
+            f.write(extracted_text)
+        logging.info(f"Extracted text saved to {output_text_file}")
     else:
         # Read the text directly from the existing output.txt file
         if os.path.exists(output_text_file):
@@ -53,7 +54,8 @@ def main(file_dir, output_text_file, summary_file, audio_file, api_key, external
                 extracted_text = f.read()
             logging.info(f"Using text from existing file: {output_text_file}")
         else:
-            raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
+            if summarize or generate_audio:
+                raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
 
     # Summarize text if the option is enabled
     summarized_text = None
@@ -84,8 +86,8 @@ if __name__ == "__main__":
         audio_file="output.mp3",
         api_key=os.getenv("GEMINI_API_KEY"),
         external_user_id=os.getenv("EXTERNAL_USER_ID"),
-        start_page=76,
-        end_page=98,
+        start_page=11,
+        end_page=16,
         summarize=False,
         generate_audio=False,
         generate_img=False,
