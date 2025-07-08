@@ -5,6 +5,12 @@ from gtts import gTTS
 from pydub import AudioSegment
 from dotenv import load_dotenv
 import os
+import struct
+import mimetypes
+# Import Gemini SDK
+from google import genai
+from google.genai import types
+import wave
 
 
 class TextToSpeech:
@@ -32,76 +38,202 @@ class TextToSpeech:
         text = re.sub(r'\n\n', '. ', text).replace('\n', ' ')  # Normalize newlines
         return text.strip()
 
-    def _google_tts(self, text, output_path, chunk_size=5000):
-        """
-        Use Google Cloud Text-to-Speech API for generating audio.
+    def _convert_to_wav(self, audio_data: bytes, mime_type: str) -> bytes:
+        """Generates a WAV file header for the given audio data and parameters.
 
+        Args:
+            audio_data: The raw audio data as a bytes object.
+            mime_type: Mime type of the audio data.
+
+        Returns:
+            A bytes object representing the WAV file header.
+        """
+        parameters = self._parse_audio_mime_type(mime_type)
+        bits_per_sample = parameters["bits_per_sample"]
+        sample_rate = parameters["rate"]
+        num_channels = 1
+        data_size = len(audio_data)
+        bytes_per_sample = bits_per_sample // 8
+        block_align = num_channels * bytes_per_sample
+        byte_rate = sample_rate * block_align
+        chunk_size = 36 + data_size  # 36 bytes for header fields before data chunk size
+
+        # http://soundfile.sapp.org/doc/WaveFormat/
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",          # ChunkID
+            chunk_size,       # ChunkSize (total file size - 8 bytes)
+            b"WAVE",          # Format
+            b"fmt ",          # Subchunk1ID
+            16,               # Subchunk1Size (16 for PCM)
+            1,                # AudioFormat (1 for PCM)
+            num_channels,     # NumChannels
+            sample_rate,      # SampleRate
+            byte_rate,        # ByteRate
+            block_align,      # BlockAlign
+            bits_per_sample,  # BitsPerSample
+            b"data",          # Subchunk2ID
+            data_size         # Subchunk2Size (size of audio data)
+        )
+        return header + audio_data
+
+    def _parse_audio_mime_type(self, mime_type: str) -> dict:
+        """Parses bits per sample and rate from an audio MIME type string.
+
+        Assumes bits per sample is encoded like "L16" and rate as "rate=xxxxx".
+
+        Args:
+            mime_type: The audio MIME type string (e.g., "audio/L16;rate=24000").
+
+        Returns:
+            A dictionary with "bits_per_sample" and "rate" keys. Values will be
+            integers if found, otherwise None.
+        """
+        bits_per_sample = 16
+        rate = 24000
+
+        # Extract rate from parameters
+        parts = mime_type.split(";")
+        for param in parts: # Skip the main type part
+            param = param.strip()
+            if param.lower().startswith("rate="):
+                try:
+                    rate_str = param.split("=", 1)[1]
+                    rate = int(rate_str)
+                except (ValueError, IndexError):
+                    # Handle cases like "rate=" with no value or non-integer value
+                    pass # Keep rate as default
+            elif param.startswith("audio/L"):
+                try:
+                    bits_per_sample = int(param.split("L", 1)[1])
+                except (ValueError, IndexError):
+                    pass # Keep bits_per_sample as default if conversion fails
+
+        return {"bits_per_sample": bits_per_sample, "rate": rate}
+
+    def _save_binary_file(self, file_name, data):
+        """Save binary data to file."""
+        with open(file_name, "wb") as f:
+            f.write(data)
+        logging.info(f"File saved to: {file_name}")
+
+    def _google_tts(self, text, output_path, chunk_size=5000,
+                model="gemini-2.5-flash-preview-tts", voice_name="Charon", style_instructions=None):
+        """
+        Use Google Gemini Flash TTS (via the Generative AI SDK) for generating audio.
+    
         Parameters:
-        - text: Input text to convert to speech.
-        - output_path: Path to save the audio file.
-        - chunk_size: Maximum byte size for each request.
+        - text:       Input text to convert to speech.
+        - output_path:Path to save the final MP3 file.
+        - chunk_size: Maximum UTF-8 byte size per TTS request.
+        - model:      Gemini TTS model to use.
+        - style_instructions: Optional style instructions for speech generation (e.g., "Speak slowly and clearly", "Use an enthusiastic tone")
         """
         try:
-            # Load environment variables from .env file
+            # Load .env and ensure we have an API key
             load_dotenv()
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("GEMINI_API_KEY not set in .env")
+            
+            client = genai.Client(api_key=api_key)
 
-            # Get the credentials path from the .env file
-            credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-
-            if not credentials_path:
-                raise ValueError("GOOGLE_APPLICATION_CREDENTIALS is not set in the .env file.")
-
-            # Set the environment variable for Google Cloud
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-
-            # Initialize Google Cloud TTS client
-            client = texttospeech.TextToSpeechClient()
-
-            # Preprocess and split text into chunks by byte size
-            processed_text = self._preprocess_text(text)
-            chunks = []
-            current_chunk = ""
-
-            for word in processed_text.split():
-                if len((current_chunk + " " + word).encode("utf-8")) > chunk_size:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = word
+            # Preprocess and chunk text by byte size
+            processed = text
+            
+            # Add style instructions to the text if provided
+            if style_instructions:
+                processed = f"{style_instructions} {processed}"
+            
+            chunks, cur = [], ""
+            for word in processed.split():
+                if len((cur + " " + word).encode("utf-8")) > chunk_size:
+                    if cur:
+                        chunks.append(cur.strip())
+                    cur = word
                 else:
-                    current_chunk += " " + word
+                    cur += " " + word if cur else word
+            if cur:
+                chunks.append(cur.strip())
 
-            if current_chunk:
-                chunks.append(current_chunk.strip())
+            logging.info(f"Splitting into {len(chunks)} chunks for Gemini TTS.")
 
-            logging.info(f"Split text into {len(chunks)} chunks for processing.")
-
-            # Process each chunk and save audio
+            # Generate each chunk and collect audio data
             audio_segments = []
+            base, _ = os.path.splitext(output_path)
+            
             for i, chunk in enumerate(chunks):
-                input_text = texttospeech.SynthesisInput(text=chunk)
-                voice = texttospeech.VoiceSelectionParams(
-                    language_code="ar-XA",
-                    ssml_gender=texttospeech.SsmlVoiceGender.MALE,
+                contents = [
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=chunk)],
+                    ),
+                ]
+                
+                # Build speech config (no style_instructions parameter here)
+                generate_content_config = types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=voice_name
+                            )
+                        )
+                    ),
                 )
-                audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
-                response = client.synthesize_speech(input=input_text, voice=voice, audio_config=audio_config)
 
-                # Save each chunk as a temporary file
-                chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
-                with open(chunk_path, "wb") as out:
-                    out.write(response.audio_content)
-                audio_segments.append(AudioSegment.from_mp3(chunk_path))
+                # Generate audio using streaming API
+                audio_data = b""
+                for packet in client.models.generate_content_stream(
+                    model=model,
+                    contents=contents,
+                    config=generate_content_config,
+                ):
+                    if (
+                        packet.candidates is None
+                        or packet.candidates[0].content is None
+                        or packet.candidates[0].content.parts is None
+                    ):
+                        continue
+                    
+                    if (packet.candidates[0].content.parts[0].inline_data and 
+                        packet.candidates[0].content.parts[0].inline_data.data):
+                        inline_data = packet.candidates[0].content.parts[0].inline_data
+                        audio_data += inline_data.data
+                        mime_type = inline_data.mime_type
 
-            # Combine all audio segments into one file
-            combined = sum(audio_segments)
-            combined.export(output_path, format="mp3")
+                if audio_data:
+                    # Convert to WAV format
+                    file_extension = mimetypes.guess_extension(mime_type)
+                    if file_extension is None:
+                        file_extension = ".wav"
+                        wav_data = self._convert_to_wav(audio_data, mime_type)
+                    else:
+                        wav_data = audio_data
+                    
+                    # Save temporary WAV file
+                    tmp_wav = f"{base}_{i}.wav"
+                    self._save_binary_file(tmp_wav, wav_data)
+                    audio_segments.append(AudioSegment.from_wav(tmp_wav))
 
-            # Clean up temporary chunk files
-            for i in range(len(chunks)):
-                os.remove(f"{output_path.rsplit('.', 1)[0]}_{i}.mp3")
+            # Concatenate and export as MP3
+            if audio_segments:
+                combined = sum(audio_segments)
+                combined.export(output_path, format="mp3")
 
-            logging.info(f"Combined audio saved to {output_path} using Google Cloud TTS.")
+                # Cleanup temporary files
+                for i in range(len(chunks)):
+                    tmp_file = f"{base}_{i}.wav"
+                    if os.path.exists(tmp_file):
+                        os.remove(tmp_file)
+
+                logging.info(f"Combined audio saved to {output_path} using Gemini Flash TTS.")
+            else:
+                logging.error("No audio data generated")
+                raise RuntimeError("No audio data generated")
+
         except Exception as e:
-            logging.error(f"Google Cloud TTS failed: {e}")
+            logging.error(f"Gemini Flash TTS failed: {e}")
             raise
 
     def _gtts_offline(self, text, output_path, chunk_size=4500):
@@ -153,7 +285,7 @@ class TextToSpeech:
             logging.error(f"gTTS offline TTS failed: {e}")
             raise
 
-    def text_to_audio(self, text, output_path, chunk_size=5000):
+    def text_to_audio(self, text, output_path, chunk_size=5000, style_instructions="Read aloud in a warm and friendly tone:"):
         """
         Convert text to speech using the selected TTS method (Google Cloud or gTTS offline).
 
@@ -161,8 +293,9 @@ class TextToSpeech:
         - text: Input text to convert to speech.
         - output_path: Path to save the combined audio file.
         - chunk_size: Maximum byte size for each request (default: 5000 for Google TTS).
+        - style_instructions: Optional style instructions for speech generation (only for Google TTS).
         """
         if self.use_google:
-            self._google_tts(text, output_path, chunk_size=chunk_size)
+            self._google_tts(text, output_path, chunk_size=chunk_size, style_instructions=style_instructions)
         else:
             self._gtts_offline(text, output_path, chunk_size=chunk_size)

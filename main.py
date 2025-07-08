@@ -57,6 +57,15 @@ def main(file_dir, output_text_file, summary_file, audio_file, api_key, external
             if summarize or generate_audio:
                 raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
 
+    #Read the text directly from the existing output.txt file
+    if os.path.exists(output_text_file):
+        with open(output_text_file, "r", encoding="utf-8") as f:
+            extracted_text = f.read()
+        logging.info(f"Using text from existing file: {output_text_file}")
+    else:
+        if summarize or generate_audio:
+            raise FileNotFoundError(f"The specified text file '{output_text_file}' does not exist.")
+        
     # Summarize text if the option is enabled
     summarized_text = None
     if summarize and extracted_text:
@@ -68,6 +77,7 @@ def main(file_dir, output_text_file, summary_file, audio_file, api_key, external
             f.write(summarized_text)
         logging.info(f"Summarized text saved to {summary_file}")
     else:
+        logging.info("Summarization not requested")
         summarized_text = extracted_text
 
     # Convert text to audio if the option is enabled

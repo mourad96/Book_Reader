@@ -1,6 +1,7 @@
 import os
 import logging
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 import fitz  # PyMuPDF
 import cv2
@@ -15,8 +16,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class ImageProcessor:
     def __init__(self, api_key):
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        self.client = genai.Client(api_key=api_key)
 
     def convert_pdf_to_cropped_images(self, pdf_path, output_dir, start_page=1, end_page=None, dpi=300):
         """Convert PDF to cropped images and detect footer lines dynamically."""
@@ -118,27 +118,48 @@ class ImageProcessor:
         return [os.path.join(directory, filename) for filename in sorted_files]
 
     def extract_text_from_image(self, image_path, lang='ara'):
-        """Extract text from an image using Google Gemini Vision."""
+        """Extract text from an image using Google Gemini 2.5 Flash."""
         logging.info(f"Processing image for text extraction: {image_path}")
         try:
+            # Load the image
             img = Image.open(image_path)
             
-            prompt = f"Extract all text from this image. The text is in {lang} language. Output only the extracted text, without any additional commentary or formatting."
-
-            # --- FIX 2: Simplified and correct way to pass image data ---
-            # The google-genai library can directly handle PIL.Image objects.
-            # This avoids manual byte conversion and potential MIME type mismatches.
-            response = self.model.generate_content([prompt, img])
-
-            # --- IMPROVEMENT: Add robustness by checking the response ---
-            # Handles cases where the model response is empty or blocked.
-            if response.text:
-                return response.text.strip()
+            # Convert PIL Image to bytes for the API
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='PNG')
+            img_bytes.seek(0)
+            
+            # Create a more specific prompt for better results
+            if lang == 'ara':
+                prompt = "Extract all Arabic text from this image. Preserve the original text structure and formatting as much as possible. Output only the extracted text without any additional commentary."
             else:
-                logging.warning(f"No text returned for {image_path}. May have been blocked or empty.")
-                # Check for safety ratings if available
-                if response.prompt_feedback:
-                    logging.warning(f"Prompt feedback: {response.prompt_feedback}")
+                prompt = f"Extract all text from this image. The text is in {lang} language. Preserve the original text structure and formatting as much as possible. Output only the extracted text without any additional commentary."
+
+            # Generate content with the image and prompt using the new API
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Content(parts=[
+                        types.Part(text=prompt),
+                        types.Part(inline_data=types.Blob(
+                            mime_type="image/png",
+                            data=img_bytes.getvalue()
+                        ))
+                    ])
+                ]
+            )
+            
+            # Check if response was successful
+            if response.candidates and response.candidates[0].content.parts:
+                text = response.candidates[0].content.parts[0].text
+                return text.strip() if text else ""
+            else:
+                logging.warning(f"No text returned for {image_path}")
+                # Check for safety ratings or other blocking reasons
+                if response.candidates and response.candidates[0].finish_reason:
+                    logging.warning(f"Finish reason: {response.candidates[0].finish_reason}")
+                if response.candidates and response.candidates[0].safety_ratings:
+                    logging.warning(f"Safety ratings: {response.candidates[0].safety_ratings}")
                 return ""
             
         except Exception as e:
@@ -153,12 +174,13 @@ class ImageProcessor:
             
         start_time = time.time()
 
-        # Using max_workers can be beneficial for I/O-bound tasks like API calls
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            # The lambda function is not strictly necessary here, but it's fine
-            results = executor.map(self.extract_text_from_image, image_files)
+        # Process images with threading for better performance
+        # Note: Be careful with rate limits when using threading with API calls
+        with ThreadPoolExecutor(max_workers=3) as executor:  # Reduced workers to respect rate limits
+            results = list(executor.map(lambda img: self.extract_text_from_image(img, lang), image_files))
         
-        text = "".join(results)
+        # Join results with proper spacing
+        text = "\n".join(filter(None, results))  # Filter out empty results
 
         end_time = time.time()
         logging.info(f"Execution time for extracting text from {len(image_files)} images: {end_time - start_time:.2f} seconds")
