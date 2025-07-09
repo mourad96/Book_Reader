@@ -131,7 +131,7 @@ class ImageProcessor:
             
             # Create a more specific prompt for better results
             if lang == 'ara':
-                prompt = "Extract all Arabic text from this image. Preserve the original text structure and formatting as much as possible. Output only the extracted text without any additional commentary."
+                prompt = "Extract all Arabic text from this image. Preserve the original text structure and formatting as much as possible. Output only the extracted text without any Citation numbers."
             else:
                 prompt = f"Extract all text from this image. The text is in {lang} language. Preserve the original text structure and formatting as much as possible. Output only the extracted text without any additional commentary."
 
