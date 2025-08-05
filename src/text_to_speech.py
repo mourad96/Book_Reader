@@ -11,6 +11,9 @@ import mimetypes
 from google import genai
 from google.genai import types
 import wave
+import concurrent.futures
+import threading
+from collections import defaultdict
 
 
 class TextToSpeech:
@@ -117,17 +120,20 @@ class TextToSpeech:
             f.write(data)
         logging.info(f"File saved to: {file_name}")
 
+
+
     def _google_tts(self, text, output_path, chunk_size=5000,
-                model="gemini-2.5-flash-preview-tts", voice_name="Charon", style_instructions=None):
+                model="gemini-2.5-flash-preview-tts", voice_name="Charon", style_instructions="Read with a natural storytelling tone, clear enunciation, and moderate pace. Emphasize sentence rhythm and end with subtle intonation shifts at periods and commas.", max_workers=5):
         """
-        Use Google Gemini Flash TTS (via the Generative AI SDK) for generating audio.
-    
+        Use Google Gemini Flash TTS (via the Generative AI SDK) for generating audio with parallel processing.
+
         Parameters:
         - text:       Input text to convert to speech.
         - output_path:Path to save the final MP3 file.
         - chunk_size: Maximum UTF-8 byte size per TTS request.
         - model:      Gemini TTS model to use.
         - style_instructions: Optional style instructions for speech generation (e.g., "Speak slowly and clearly", "Use an enthusiastic tone")
+        - max_workers: Maximum number of parallel workers (default: 5)
         """
         try:
             # Load .env and ensure we have an API key
@@ -158,19 +164,18 @@ class TextToSpeech:
 
             logging.info(f"Splitting into {len(chunks)} chunks for Gemini TTS.")
 
-            # Generate each chunk and collect audio data
-            audio_segments = []
-            base, _ = os.path.splitext(output_path)
-            
-            for i, chunk in enumerate(chunks):
+            def process_chunk(chunk_data):
+                """Process a single chunk and return (index, audio_data, mime_type)"""
+                chunk_index, chunk_text = chunk_data
+                
                 contents = [
                     types.Content(
                         role="user",
-                        parts=[types.Part.from_text(text=chunk)],
+                        parts=[types.Part.from_text(text=chunk_text)],
                     ),
                 ]
                 
-                # Build speech config (no style_instructions parameter here)
+                # Build speech config
                 generate_content_config = types.GenerateContentConfig(
                     response_modalities=["AUDIO"],
                     speech_config=types.SpeechConfig(
@@ -184,25 +189,66 @@ class TextToSpeech:
 
                 # Generate audio using streaming API
                 audio_data = b""
-                for packet in client.models.generate_content_stream(
-                    model=model,
-                    contents=contents,
-                    config=generate_content_config,
-                ):
-                    if (
-                        packet.candidates is None
-                        or packet.candidates[0].content is None
-                        or packet.candidates[0].content.parts is None
+                mime_type = None
+                
+                try:
+                    for packet in client.models.generate_content_stream(
+                        model=model,
+                        contents=contents,
+                        config=generate_content_config,
                     ):
-                        continue
-                    
-                    if (packet.candidates[0].content.parts[0].inline_data and 
-                        packet.candidates[0].content.parts[0].inline_data.data):
-                        inline_data = packet.candidates[0].content.parts[0].inline_data
-                        audio_data += inline_data.data
-                        mime_type = inline_data.mime_type
+                        if (
+                            packet.candidates is None
+                            or packet.candidates[0].content is None
+                            or packet.candidates[0].content.parts is None
+                        ):
+                            continue
+                        
+                        if (packet.candidates[0].content.parts[0].inline_data and 
+                            packet.candidates[0].content.parts[0].inline_data.data):
+                            inline_data = packet.candidates[0].content.parts[0].inline_data
+                            audio_data += inline_data.data
+                            if mime_type is None:
+                                mime_type = inline_data.mime_type
 
-                if audio_data:
+                    return chunk_index, audio_data, mime_type
+                    
+                except Exception as e:
+                    logging.error(f"Error processing chunk {chunk_index}: {e}")
+                    return chunk_index, None, None
+
+            # Process chunks in parallel using ThreadPoolExecutor
+            chunk_results = {}  # Dictionary to store results by index
+            base, _ = os.path.splitext(output_path)
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all chunks for processing
+                future_to_index = {
+                    executor.submit(process_chunk, (i, chunk)): i 
+                    for i, chunk in enumerate(chunks)
+                }
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_index):
+                    chunk_index = future_to_index[future]
+                    try:
+                        index, audio_data, mime_type = future.result()
+                        if audio_data:
+                            chunk_results[index] = (audio_data, mime_type)
+                            logging.info(f"Completed chunk {index + 1}/{len(chunks)}")
+                        else:
+                            logging.error(f"No audio data for chunk {index}")
+                            chunk_results[index] = None
+                    except Exception as e:
+                        logging.error(f"Chunk {chunk_index} generated an exception: {e}")
+                        chunk_results[chunk_index] = None
+
+            # Process results in correct order and create audio segments
+            audio_segments = []
+            for i in range(len(chunks)):
+                if i in chunk_results and chunk_results[i] is not None:
+                    audio_data, mime_type = chunk_results[i]
+                    
                     # Convert to WAV format
                     file_extension = mimetypes.guess_extension(mime_type)
                     if file_extension is None:
@@ -215,6 +261,8 @@ class TextToSpeech:
                     tmp_wav = f"{base}_{i}.wav"
                     self._save_binary_file(tmp_wav, wav_data)
                     audio_segments.append(AudioSegment.from_wav(tmp_wav))
+                else:
+                    logging.warning(f"Chunk {i} failed to process, skipping...")
 
             # Concatenate and export as MP3
             if audio_segments:
@@ -227,10 +275,10 @@ class TextToSpeech:
                     if os.path.exists(tmp_file):
                         os.remove(tmp_file)
 
-                logging.info(f"Combined audio saved to {output_path} using Gemini Flash TTS.")
+                logging.info(f"Combined audio saved to {output_path} using Gemini Flash TTS (parallel processing).")
             else:
-                logging.error("No audio data generated")
-                raise RuntimeError("No audio data generated")
+                logging.error("No audio data generated from any chunks")
+                raise RuntimeError("No audio data generated from any chunks")
 
         except Exception as e:
             logging.error(f"Gemini Flash TTS failed: {e}")
