@@ -58,7 +58,7 @@ pip install -r requirements.txt
 
 4. Create a `.env` file in the root directory with your API credentials from [app.on-demand.io](https://app.on-demand.io):
 ```env
-API_KEY=your_api_key_here            # used for OCR and summarization
+GEMINI_API_KEY=your_api_key_here     # used for OCR and summarization
 EXTERNAL_USER_ID=your_external_user_id_here  # from app.on-demand.io
 ```
 
@@ -83,10 +83,14 @@ main(
     output_text_file="output.txt",    # Output file for extracted text
     summary_file="summary.txt",       # Output file for summary
     audio_file="output.mp3",          # Output audio file
+    api_key=os.getenv("GEMINI_API_KEY"),       # Gemini API key
+    external_user_id=os.getenv("EXTERNAL_USER_ID"),  # On-demand external user ID
     start_page=1,                     # Starting page number
     end_page=None,                    # Ending page number (None for all pages)
     summarize=True,                   # Enable/disable summarization
-    generate_audio=True               # Enable/disable audio generation
+    generate_audio=True,              # Enable/disable audio generation
+    generate_img=True,                # Enable/disable image generation
+    extract_txt=False                 # Enable/disable text extraction
 )
 ```
 
