@@ -14,6 +14,7 @@ import wave
 import concurrent.futures
 import threading
 from collections import defaultdict
+import time
 
 
 class TextToSpeech:
@@ -28,29 +29,71 @@ class TextToSpeech:
         self.language = language
         self.use_google = use_google
 
-    def _preprocess_text(self, text):
+
+    def _smart_text_chunking(self, text, max_byte_size=5000):
         """
-        Preprocess text to improve speech continuity:
-        1. Remove extra whitespaces.
-        2. Replace multiple newlines with a single space.
-        3. Remove unnecessary punctuation that might cause pauses.
+        Improved text chunking that respects sentence boundaries and avoids word splitting.
+        
+        Parameters:
+        - text: Input text to chunk
+        - max_byte_size: Maximum byte size per chunk
+        
+        Returns:
+        - List of text chunks
         """
-        text = re.sub(r'\s+', ' ', text)  # Normalize spaces
-        text = text.replace('؛', ',')    # Replace Arabic semicolon with a comma
-        text = text.replace('»', '').replace('«', '')  # Remove quotes
-        text = re.sub(r'\n\n', '. ', text).replace('\n', ' ')  # Normalize newlines
-        return text.strip()
+        # Preprocess the text first
+        processed_text = text
+        
+        # Split into sentences first to respect natural boundaries
+        sentence_endings = re.compile(r'[.!?؟][\s]+')
+        sentences = sentence_endings.split(processed_text)
+        
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # Check if adding this sentence would exceed the byte limit
+            test_chunk = current_chunk + " " + sentence if current_chunk else sentence
+            
+            if len(test_chunk.encode('utf-8')) <= max_byte_size:
+                current_chunk = test_chunk
+            else:
+                # If current_chunk is not empty, save it and start new chunk
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+                else:
+                    # If single sentence is too long, split by words
+                    words = sentence.split()
+                    temp_chunk = ""
+                    
+                    for word in words:
+                        test_word_chunk = temp_chunk + " " + word if temp_chunk else word
+                        
+                        if len(test_word_chunk.encode('utf-8')) <= max_byte_size:
+                            temp_chunk = test_word_chunk
+                        else:
+                            if temp_chunk:
+                                chunks.append(temp_chunk.strip())
+                            temp_chunk = word
+                    
+                    current_chunk = temp_chunk
+        
+        # Add the last chunk if it exists
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        # Remove empty chunks
+        chunks = [chunk for chunk in chunks if chunk.strip()]
+        
+        return chunks
 
     def _convert_to_wav(self, audio_data: bytes, mime_type: str) -> bytes:
-        """Generates a WAV file header for the given audio data and parameters.
-
-        Args:
-            audio_data: The raw audio data as a bytes object.
-            mime_type: Mime type of the audio data.
-
-        Returns:
-            A bytes object representing the WAV file header.
-        """
+        """Generates a WAV file header for the given audio data and parameters."""
         parameters = self._parse_audio_mime_type(mime_type)
         bits_per_sample = parameters["bits_per_sample"]
         sample_rate = parameters["rate"]
@@ -59,58 +102,35 @@ class TextToSpeech:
         bytes_per_sample = bits_per_sample // 8
         block_align = num_channels * bytes_per_sample
         byte_rate = sample_rate * block_align
-        chunk_size = 36 + data_size  # 36 bytes for header fields before data chunk size
+        chunk_size = 36 + data_size
 
-        # http://soundfile.sapp.org/doc/WaveFormat/
         header = struct.pack(
             "<4sI4s4sIHHIIHH4sI",
-            b"RIFF",          # ChunkID
-            chunk_size,       # ChunkSize (total file size - 8 bytes)
-            b"WAVE",          # Format
-            b"fmt ",          # Subchunk1ID
-            16,               # Subchunk1Size (16 for PCM)
-            1,                # AudioFormat (1 for PCM)
-            num_channels,     # NumChannels
-            sample_rate,      # SampleRate
-            byte_rate,        # ByteRate
-            block_align,      # BlockAlign
-            bits_per_sample,  # BitsPerSample
-            b"data",          # Subchunk2ID
-            data_size         # Subchunk2Size (size of audio data)
+            b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1,
+            num_channels, sample_rate, byte_rate, block_align,
+            bits_per_sample, b"data", data_size
         )
         return header + audio_data
 
     def _parse_audio_mime_type(self, mime_type: str) -> dict:
-        """Parses bits per sample and rate from an audio MIME type string.
-
-        Assumes bits per sample is encoded like "L16" and rate as "rate=xxxxx".
-
-        Args:
-            mime_type: The audio MIME type string (e.g., "audio/L16;rate=24000").
-
-        Returns:
-            A dictionary with "bits_per_sample" and "rate" keys. Values will be
-            integers if found, otherwise None.
-        """
+        """Parses bits per sample and rate from an audio MIME type string."""
         bits_per_sample = 16
         rate = 24000
 
-        # Extract rate from parameters
         parts = mime_type.split(";")
-        for param in parts: # Skip the main type part
+        for param in parts:
             param = param.strip()
             if param.lower().startswith("rate="):
                 try:
                     rate_str = param.split("=", 1)[1]
                     rate = int(rate_str)
                 except (ValueError, IndexError):
-                    # Handle cases like "rate=" with no value or non-integer value
-                    pass # Keep rate as default
+                    pass
             elif param.startswith("audio/L"):
                 try:
                     bits_per_sample = int(param.split("L", 1)[1])
                 except (ValueError, IndexError):
-                    pass # Keep bits_per_sample as default if conversion fails
+                    pass
 
         return {"bits_per_sample": bits_per_sample, "rate": rate}
 
@@ -120,23 +140,73 @@ class TextToSpeech:
             f.write(data)
         logging.info(f"File saved to: {file_name}")
 
-
-
-    def _google_tts(self, text, output_path, chunk_size=5000,
-                model="gemini-2.5-flash-preview-tts", voice_name="Charon", style_instructions="Read with a natural storytelling tone, clear enunciation, and moderate pace. Emphasize sentence rhythm and end with subtle intonation shifts at periods and commas.", max_workers=5):
+    def _process_single_chunk(self, chunk_index, chunk_text, model, voice_name, client):
         """
-        Use Google Gemini Flash TTS (via the Generative AI SDK) for generating audio with parallel processing.
-
-        Parameters:
-        - text:       Input text to convert to speech.
-        - output_path:Path to save the final MP3 file.
-        - chunk_size: Maximum UTF-8 byte size per TTS request.
-        - model:      Gemini TTS model to use.
-        - style_instructions: Optional style instructions for speech generation (e.g., "Speak slowly and clearly", "Use an enthusiastic tone")
-        - max_workers: Maximum number of parallel workers (default: 5)
+        Process a single chunk and return the result.
+        
+        Returns:
+        - tuple: (chunk_index, success, audio_data, mime_type, error_message)
         """
         try:
-            # Load .env and ensure we have an API key
+            logging.info(f"Processing chunk {chunk_index + 1}: '{chunk_text[:50]}...'")
+            
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=chunk_text)],
+                ),
+            ]
+            
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
+                    )
+                ),
+            )
+
+            audio_data = b""
+            mime_type = None
+            
+            for packet in client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=generate_content_config,
+            ):
+                if (packet.candidates is None or 
+                    packet.candidates[0].content is None or 
+                    packet.candidates[0].content.parts is None):
+                    continue
+                
+                if (packet.candidates[0].content.parts[0].inline_data and 
+                    packet.candidates[0].content.parts[0].inline_data.data):
+                    inline_data = packet.candidates[0].content.parts[0].inline_data
+                    audio_data += inline_data.data
+                    if mime_type is None:
+                        mime_type = inline_data.mime_type
+
+            if not audio_data:
+                return chunk_index, False, None, None, "No audio data received"
+            
+            logging.info(f"Successfully processed chunk {chunk_index + 1} ({len(audio_data)} bytes)")
+            return chunk_index, True, audio_data, mime_type, None
+                    
+        except Exception as e:
+            error_msg = f"Error processing chunk {chunk_index}: {str(e)}"
+            logging.error(error_msg)
+            return chunk_index, False, None, None, error_msg
+
+    def _google_tts(self, text, output_path, chunk_size=5000,
+                model="gemini-2.5-flash-preview-tts", voice_name="Charon", 
+                style_instructions="Read with a natural storytelling tone, clear enunciation, and moderate pace. Emphasize sentence rhythm and end with subtle intonation shifts at periods and commas.", 
+                max_workers=3, max_retries=2):
+        """
+        Use Google Gemini Flash TTS with improved error handling and chunk management.
+        """
+        try:
             load_dotenv()
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
@@ -144,169 +214,148 @@ class TextToSpeech:
             
             client = genai.Client(api_key=api_key)
 
-            # Preprocess and chunk text by byte size
-            processed = text
+            # Smart chunking that respects sentence boundaries
+            chunks = self._smart_text_chunking(text, chunk_size)
             
-            # Add style instructions to the text if provided
-            if style_instructions:
-                processed = f"{style_instructions} {processed}"
+            # Add style instructions to first chunk only to avoid repetition
+            if style_instructions and chunks:
+                chunks[0] = f"{style_instructions} {chunks[0]}"
             
-            chunks, cur = [], ""
-            for word in processed.split():
-                if len((cur + " " + word).encode("utf-8")) > chunk_size:
-                    if cur:
-                        chunks.append(cur.strip())
-                    cur = word
-                else:
-                    cur += " " + word if cur else word
-            if cur:
-                chunks.append(cur.strip())
+            logging.info(f"Split text into {len(chunks)} chunks for Gemini TTS.")
+            for i, chunk in enumerate(chunks):
+                logging.info(f"Chunk {i + 1} length: {len(chunk)} chars, {len(chunk.encode('utf-8'))} bytes")
 
-            logging.info(f"Splitting into {len(chunks)} chunks for Gemini TTS.")
-
-            def process_chunk(chunk_data):
-                """Process a single chunk and return (index, audio_data, mime_type)"""
-                chunk_index, chunk_text = chunk_data
-                
-                contents = [
-                    types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(text=chunk_text)],
-                    ),
-                ]
-                
-                # Build speech config
-                generate_content_config = types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name=voice_name
-                            )
-                        )
-                    ),
-                )
-
-                # Generate audio using streaming API
-                audio_data = b""
-                mime_type = None
-                
-                try:
-                    for packet in client.models.generate_content_stream(
-                        model=model,
-                        contents=contents,
-                        config=generate_content_config,
-                    ):
-                        if (
-                            packet.candidates is None
-                            or packet.candidates[0].content is None
-                            or packet.candidates[0].content.parts is None
-                        ):
-                            continue
-                        
-                        if (packet.candidates[0].content.parts[0].inline_data and 
-                            packet.candidates[0].content.parts[0].inline_data.data):
-                            inline_data = packet.candidates[0].content.parts[0].inline_data
-                            audio_data += inline_data.data
-                            if mime_type is None:
-                                mime_type = inline_data.mime_type
-
-                    return chunk_index, audio_data, mime_type
-                    
-                except Exception as e:
-                    logging.error(f"Error processing chunk {chunk_index}: {e}")
-                    return chunk_index, None, None
-
-            # Process chunks in parallel using ThreadPoolExecutor
-            chunk_results = {}  # Dictionary to store results by index
+            # Dictionary to store results with guaranteed ordering
+            chunk_results = {}
             base, _ = os.path.splitext(output_path)
+            failed_chunks = []
             
+            # Process chunks with limited parallelism to avoid rate limits
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all chunks for processing
-                future_to_index = {
-                    executor.submit(process_chunk, (i, chunk)): i 
-                    for i, chunk in enumerate(chunks)
-                }
+                # Submit chunks for processing
+                future_to_index = {}
+                for i, chunk in enumerate(chunks):
+                    future = executor.submit(
+                        self._process_single_chunk, i, chunk, model, voice_name, client
+                    )
+                    future_to_index[future] = i
                 
                 # Collect results as they complete
                 for future in concurrent.futures.as_completed(future_to_index):
-                    chunk_index = future_to_index[future]
-                    try:
-                        index, audio_data, mime_type = future.result()
-                        if audio_data:
-                            chunk_results[index] = (audio_data, mime_type)
-                            logging.info(f"Completed chunk {index + 1}/{len(chunks)}")
-                        else:
-                            logging.error(f"No audio data for chunk {index}")
-                            chunk_results[index] = None
-                    except Exception as e:
-                        logging.error(f"Chunk {chunk_index} generated an exception: {e}")
-                        chunk_results[chunk_index] = None
-
-            # Process results in correct order and create audio segments
-            audio_segments = []
-            for i in range(len(chunks)):
-                if i in chunk_results and chunk_results[i] is not None:
-                    audio_data, mime_type = chunk_results[i]
+                    chunk_index, success, audio_data, mime_type, error_msg = future.result()
                     
-                    # Convert to WAV format
-                    file_extension = mimetypes.guess_extension(mime_type)
-                    if file_extension is None:
-                        file_extension = ".wav"
-                        wav_data = self._convert_to_wav(audio_data, mime_type)
+                    if success:
+                        chunk_results[chunk_index] = (audio_data, mime_type)
+                        logging.info(f"✓ Chunk {chunk_index + 1}/{len(chunks)} completed successfully")
                     else:
-                        wav_data = audio_data
+                        logging.error(f"✗ Chunk {chunk_index + 1} failed: {error_msg}")
+                        failed_chunks.append(chunk_index)
+
+            # Retry failed chunks sequentially
+            for retry_attempt in range(max_retries):
+                if not failed_chunks:
+                    break
                     
-                    # Save temporary WAV file
-                    tmp_wav = f"{base}_{i}.wav"
-                    self._save_binary_file(tmp_wav, wav_data)
-                    audio_segments.append(AudioSegment.from_wav(tmp_wav))
+                logging.info(f"Retry attempt {retry_attempt + 1}/{max_retries} for {len(failed_chunks)} failed chunks")
+                retry_failed = []
+                
+                for chunk_index in failed_chunks:
+                    time.sleep(1)  # Rate limiting
+                    chunk_index, success, audio_data, mime_type, error_msg = self._process_single_chunk(
+                        chunk_index, chunks[chunk_index], model, voice_name, client
+                    )
+                    
+                    if success:
+                        chunk_results[chunk_index] = (audio_data, mime_type)
+                        logging.info(f"✓ Retry successful for chunk {chunk_index + 1}")
+                    else:
+                        logging.error(f"✗ Retry failed for chunk {chunk_index + 1}: {error_msg}")
+                        retry_failed.append(chunk_index)
+                
+                failed_chunks = retry_failed
+
+            # Check if we have all chunks
+            missing_chunks = [i for i in range(len(chunks)) if i not in chunk_results]
+            if missing_chunks:
+                raise RuntimeError(f"Failed to process chunks: {[i+1 for i in missing_chunks]}")
+
+            # Process results in correct order
+            audio_segments = []
+            temp_files = []
+            
+            for i in range(len(chunks)):
+                if i not in chunk_results:
+                    logging.error(f"Missing chunk {i + 1}, cannot continue")
+                    raise RuntimeError(f"Missing chunk {i + 1}")
+                
+                audio_data, mime_type = chunk_results[i]
+                
+                # Convert to WAV format
+                file_extension = mimetypes.guess_extension(mime_type)
+                if file_extension is None:
+                    file_extension = ".wav"
+                    wav_data = self._convert_to_wav(audio_data, mime_type)
                 else:
-                    logging.warning(f"Chunk {i} failed to process, skipping...")
+                    wav_data = audio_data
+                
+                # Save temporary WAV file with unique timestamp to avoid conflicts
+                tmp_wav = f"{base}_chunk_{i:03d}_{int(time.time())}.wav"
+                temp_files.append(tmp_wav)
+                self._save_binary_file(tmp_wav, wav_data)
+                
+                # Load and add to segments list
+                try:
+                    segment = AudioSegment.from_wav(tmp_wav)
+                    audio_segments.append(segment)
+                    logging.info(f"Added chunk {i + 1} to audio segments ({len(segment)} ms)")
+                except Exception as e:
+                    logging.error(f"Failed to load audio segment from {tmp_wav}: {e}")
+                    raise
 
-            # Concatenate and export as MP3
+            # Concatenate all segments in order
             if audio_segments:
-                combined = sum(audio_segments)
+                logging.info(f"Combining {len(audio_segments)} audio segments...")
+                combined = audio_segments[0]
+                for segment in audio_segments[1:]:
+                    combined += segment
+                
+                # Export final audio
                 combined.export(output_path, format="mp3")
-
+                logging.info(f"✓ Combined audio saved to {output_path} ({len(combined)} ms total)")
+                
                 # Cleanup temporary files
-                for i in range(len(chunks)):
-                    tmp_file = f"{base}_{i}.wav"
-                    if os.path.exists(tmp_file):
-                        os.remove(tmp_file)
-
-                logging.info(f"Combined audio saved to {output_path} using Gemini Flash TTS (parallel processing).")
+                for temp_file in temp_files:
+                    try:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                    except Exception as e:
+                        logging.warning(f"Could not remove temp file {temp_file}: {e}")
+                
             else:
-                logging.error("No audio data generated from any chunks")
-                raise RuntimeError("No audio data generated from any chunks")
+                raise RuntimeError("No audio segments were created")
 
         except Exception as e:
             logging.error(f"Gemini Flash TTS failed: {e}")
+            # Cleanup temp files on error
+            base, _ = os.path.splitext(output_path)
+            for i in range(100):  # Clean up any leftover temp files
+                temp_pattern = f"{base}_chunk_{i:03d}_*.wav"
+                import glob
+                for temp_file in glob.glob(temp_pattern):
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
             raise
 
     def _gtts_offline(self, text, output_path, chunk_size=4500):
         """
-        Use gTTS offline to convert text to speech.
-
-        Parameters:
-        - text: Input text to convert to speech.
-        - output_path: Path to save the audio file.
-        - chunk_size: Maximum characters per request (default: 4500).
+        Use gTTS offline to convert text to speech with improved chunking.
         """
         try:
-            # Preprocess and chunk the text
-            chunks = []
-            processed_text = self._preprocess_text(text)
-
-            while processed_text:
-                if len(processed_text) <= chunk_size:
-                    chunks.append(processed_text)
-                    break
-                split_point = processed_text.rfind(' ', 0, chunk_size)
-                if split_point == -1:
-                    split_point = chunk_size
-                chunks.append(processed_text[:split_point])
-                processed_text = processed_text[split_point:].strip()
+            # Use smart chunking for better sentence boundaries
+            chunks = self._smart_text_chunking(text, chunk_size)
+            logging.info(f"Split into {len(chunks)} chunks for gTTS.")
 
             # Generate audio for each chunk
             if len(chunks) == 1:
@@ -314,36 +363,55 @@ class TextToSpeech:
                 tts.save(output_path)
             else:
                 audio_segments = []
+                temp_files = []
+                
                 for i, chunk in enumerate(chunks):
-                    chunk_path = f"{output_path.rsplit('.', 1)[0]}_{i}.mp3"
+                    chunk_path = f"{output_path.rsplit('.', 1)[0]}_gtts_{i:03d}.mp3"
+                    temp_files.append(chunk_path)
+                    
                     tts = gTTS(text=chunk, lang=self.language, slow=False)
                     tts.save(chunk_path)
                     audio_segments.append(AudioSegment.from_mp3(chunk_path))
+                    logging.info(f"Generated chunk {i + 1}/{len(chunks)}")
 
-                # Combine all audio segments into one file
+                # Combine all audio segments
                 combined = sum(audio_segments)
                 combined.export(output_path, format="mp3")
 
-                # Clean up temporary chunk files
-                for i in range(len(chunks)):
-                    os.remove(f"{output_path.rsplit('.', 1)[0]}_{i}.mp3")
+                # Clean up temporary files
+                for temp_file in temp_files:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
 
-            logging.info(f"Audio saved to {output_path} using gTTS offline.")
+            logging.info(f"✓ Audio saved to {output_path} using gTTS offline.")
+            
         except Exception as e:
             logging.error(f"gTTS offline TTS failed: {e}")
             raise
 
-    def text_to_audio(self, text, output_path, chunk_size=5000, style_instructions="Read aloud in a warm and friendly tone:"):
+    def text_to_audio(self, text, output_path, chunk_size=5000, 
+                     max_workers=5):
         """
-        Convert text to speech using the selected TTS method (Google Cloud or gTTS offline).
-
+        Convert text to speech using the selected TTS method.
+        
         Parameters:
-        - text: Input text to convert to speech.
-        - output_path: Path to save the combined audio file.
-        - chunk_size: Maximum byte size for each request (default: 5000 for Google TTS).
-        - style_instructions: Optional style instructions for speech generation (only for Google TTS).
+        - text: Input text to convert to speech
+        - output_path: Path to save the combined audio file
+        - chunk_size: Maximum byte size for each request (default: 5000)
+        - style_instructions: Style instructions for speech generation (Google TTS only)
+        - max_workers: Maximum parallel workers for Google TTS (default: 3)
         """
+        if not text or not text.strip():
+            raise ValueError("Input text cannot be empty")
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+        
         if self.use_google:
-            self._google_tts(text, output_path, chunk_size=chunk_size, style_instructions=style_instructions)
+            self._google_tts(
+                text, output_path, 
+                chunk_size=chunk_size, 
+                max_workers=max_workers
+            )
         else:
             self._gtts_offline(text, output_path, chunk_size=chunk_size)
