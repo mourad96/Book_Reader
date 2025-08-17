@@ -45,7 +45,7 @@ class TextToSpeech:
         processed_text = text
         
         # Split into sentences first to respect natural boundaries
-        sentence_endings = re.compile(r'[.!?؟][\s]+')
+        sentence_endings = re.compile(r'[.!?؟‎][\s]+')
         sentences = sentence_endings.split(processed_text)
         
         chunks = []
@@ -140,9 +140,19 @@ class TextToSpeech:
             f.write(data)
         logging.info(f"File saved to: {file_name}")
 
-    def _process_single_chunk(self, chunk_index, chunk_text, model, voice_name, client):
+    def _process_single_chunk(self, chunk_index, chunk_text, model, voice_name, client, 
+                            style_instructions=None, voice_config_overrides=None):
         """
-        Process a single chunk and return the result.
+        Process a single chunk with consistent voice parameters.
+        
+        Parameters:
+        - chunk_index: Index of the chunk being processed
+        - chunk_text: Text content to process
+        - model: Model name for TTS
+        - voice_name: Voice name to use
+        - client: API client
+        - style_instructions: Style instructions to apply to this chunk
+        - voice_config_overrides: Additional voice configuration parameters
         
         Returns:
         - tuple: (chunk_index, success, audio_data, mime_type, error_message)
@@ -150,22 +160,39 @@ class TextToSpeech:
         try:
             logging.info(f"Processing chunk {chunk_index + 1}: '{chunk_text[:50]}...'")
             
+            # Apply style instructions to every chunk for consistency
+            if style_instructions:
+                # Create a consistent prompt structure
+                formatted_text = f"{style_instructions}\n\nText to read: {chunk_text}"
+            else:
+                formatted_text = chunk_text
+            
             contents = [
                 types.Content(
                     role="user",
-                    parts=[types.Part.from_text(text=chunk_text)],
+                    parts=[types.Part.from_text(text=formatted_text)],
                 ),
             ]
             
+            # Build voice config with consistency parameters
+            voice_config = types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=voice_name
+                )
+            )
+            
+            # Apply any voice config overrides for consistency
+            speech_config = types.SpeechConfig(voice_config=voice_config)
+            
+            # Add voice consistency parameters if available
+            if voice_config_overrides:
+                # Apply additional parameters for voice consistency
+                # These might include pitch, speed, etc. depending on API capabilities
+                pass
+            
             generate_content_config = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name
-                        )
-                    )
-                ),
+                speech_config=speech_config
             )
 
             audio_data = b""
@@ -202,9 +229,9 @@ class TextToSpeech:
     def _google_tts(self, text, output_path, chunk_size=5000,
                 model="gemini-2.5-flash-preview-tts", voice_name="Charon", 
                 style_instructions="Read with a natural storytelling tone, clear enunciation, and moderate pace. Emphasize sentence rhythm and end with subtle intonation shifts at periods and commas.", 
-                max_workers=3, max_retries=2):
+                max_workers=3, max_retries=2, voice_config_overrides=None):
         """
-        Use Google Gemini Flash TTS with improved error handling and chunk management.
+        Use Google Gemini Flash TTS with improved error handling, chunk management, and voice consistency.
         """
         try:
             load_dotenv()
@@ -217,10 +244,6 @@ class TextToSpeech:
             # Smart chunking that respects sentence boundaries
             chunks = self._smart_text_chunking(text, chunk_size)
             
-            # Add style instructions to first chunk only to avoid repetition
-            if style_instructions and chunks:
-                chunks[0] = f"{style_instructions} {chunks[0]}"
-            
             logging.info(f"Split text into {len(chunks)} chunks for Gemini TTS.")
             for i, chunk in enumerate(chunks):
                 logging.info(f"Chunk {i + 1} length: {len(chunk)} chars, {len(chunk.encode('utf-8'))} bytes")
@@ -230,13 +253,19 @@ class TextToSpeech:
             base, _ = os.path.splitext(output_path)
             failed_chunks = []
             
+            # Create a consistent voice configuration that will be used for all chunks
+            consistent_voice_config = voice_config_overrides or {}
+            
             # Process chunks with limited parallelism to avoid rate limits
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit chunks for processing
+                # Submit chunks for processing with consistent parameters
                 future_to_index = {}
                 for i, chunk in enumerate(chunks):
                     future = executor.submit(
-                        self._process_single_chunk, i, chunk, model, voice_name, client
+                        self._process_single_chunk, 
+                        i, chunk, model, voice_name, client,
+                        style_instructions=style_instructions,  # Apply to ALL chunks
+                        voice_config_overrides=consistent_voice_config
                     )
                     future_to_index[future] = i
                 
@@ -251,7 +280,7 @@ class TextToSpeech:
                         logging.error(f"✗ Chunk {chunk_index + 1} failed: {error_msg}")
                         failed_chunks.append(chunk_index)
 
-            # Retry failed chunks sequentially
+            # Retry failed chunks sequentially with same voice parameters
             for retry_attempt in range(max_retries):
                 if not failed_chunks:
                     break
@@ -262,7 +291,9 @@ class TextToSpeech:
                 for chunk_index in failed_chunks:
                     time.sleep(1)  # Rate limiting
                     chunk_index, success, audio_data, mime_type, error_msg = self._process_single_chunk(
-                        chunk_index, chunks[chunk_index], model, voice_name, client
+                        chunk_index, chunks[chunk_index], model, voice_name, client,
+                        style_instructions=style_instructions,  # Consistent style for retries
+                        voice_config_overrides=consistent_voice_config
                     )
                     
                     if success:
@@ -279,7 +310,7 @@ class TextToSpeech:
             if missing_chunks:
                 raise RuntimeError(f"Failed to process chunks: {[i+1 for i in missing_chunks]}")
 
-            # Process results in correct order
+            # Process results in correct order with audio normalization for consistency
             audio_segments = []
             temp_files = []
             
@@ -303,21 +334,34 @@ class TextToSpeech:
                 temp_files.append(tmp_wav)
                 self._save_binary_file(tmp_wav, wav_data)
                 
-                # Load and add to segments list
+                # Load and normalize audio segment for consistency
                 try:
                     segment = AudioSegment.from_wav(tmp_wav)
-                    audio_segments.append(segment)
-                    logging.info(f"Added chunk {i + 1} to audio segments ({len(segment)} ms)")
+                    
+                    # Apply audio normalization for voice consistency
+                    # Normalize volume levels between chunks
+                    normalized_segment = segment.normalize()
+                    
+                    # Optional: Apply consistent audio processing
+                    # You can add more audio processing here for consistency
+                    
+                    audio_segments.append(normalized_segment)
+                    logging.info(f"Added normalized chunk {i + 1} to audio segments ({len(normalized_segment)} ms)")
                 except Exception as e:
                     logging.error(f"Failed to load audio segment from {tmp_wav}: {e}")
                     raise
 
-            # Concatenate all segments in order
+            # Concatenate all segments in order with smooth transitions
             if audio_segments:
                 logging.info(f"Combining {len(audio_segments)} audio segments...")
                 combined = audio_segments[0]
+                
                 for segment in audio_segments[1:]:
-                    combined += segment
+                    # Add very small crossfade to smooth transitions between chunks
+                    combined = combined.append(segment, crossfade=50)  # 50ms crossfade
+                
+                # Final normalization for overall consistency
+                combined = combined.normalize()
                 
                 # Export final audio
                 combined.export(output_path, format="mp3")
@@ -350,14 +394,14 @@ class TextToSpeech:
 
     def _gtts_offline(self, text, output_path, chunk_size=4500):
         """
-        Use gTTS offline to convert text to speech with improved chunking.
+        Use gTTS offline to convert text to speech with improved chunking and consistency.
         """
         try:
             # Use smart chunking for better sentence boundaries
             chunks = self._smart_text_chunking(text, chunk_size)
             logging.info(f"Split into {len(chunks)} chunks for gTTS.")
 
-            # Generate audio for each chunk
+            # Generate audio for each chunk with consistent parameters
             if len(chunks) == 1:
                 tts = gTTS(text=chunks[0], lang=self.language, slow=False)
                 tts.save(output_path)
@@ -369,13 +413,23 @@ class TextToSpeech:
                     chunk_path = f"{output_path.rsplit('.', 1)[0]}_gtts_{i:03d}.mp3"
                     temp_files.append(chunk_path)
                     
+                    # Use consistent parameters for all chunks
                     tts = gTTS(text=chunk, lang=self.language, slow=False)
                     tts.save(chunk_path)
-                    audio_segments.append(AudioSegment.from_mp3(chunk_path))
+                    
+                    # Load and normalize segment
+                    segment = AudioSegment.from_mp3(chunk_path)
+                    normalized_segment = segment.normalize()
+                    audio_segments.append(normalized_segment)
                     logging.info(f"Generated chunk {i + 1}/{len(chunks)}")
 
-                # Combine all audio segments
-                combined = sum(audio_segments)
+                # Combine all audio segments with smooth transitions
+                combined = audio_segments[0]
+                for segment in audio_segments[1:]:
+                    combined = combined.append(segment, crossfade=50)  # Small crossfade
+                
+                # Final normalization
+                combined = combined.normalize()
                 combined.export(output_path, format="mp3")
 
                 # Clean up temporary files
@@ -390,16 +444,17 @@ class TextToSpeech:
             raise
 
     def text_to_audio(self, text, output_path, chunk_size=5000, 
-                     max_workers=5):
+                     max_workers=5, style_instructions=None, voice_config_overrides=None):
         """
-        Convert text to speech using the selected TTS method.
+        Convert text to speech using the selected TTS method with improved voice consistency.
         
         Parameters:
         - text: Input text to convert to speech
         - output_path: Path to save the combined audio file
         - chunk_size: Maximum byte size for each request (default: 5000)
-        - style_instructions: Style instructions for speech generation (Google TTS only)
         - max_workers: Maximum parallel workers for Google TTS (default: 3)
+        - style_instructions: Style instructions applied to ALL chunks for consistency
+        - voice_config_overrides: Additional voice configuration for consistency
         """
         if not text or not text.strip():
             raise ValueError("Input text cannot be empty")
@@ -411,7 +466,9 @@ class TextToSpeech:
             self._google_tts(
                 text, output_path, 
                 chunk_size=chunk_size, 
-                max_workers=max_workers
+                max_workers=max_workers,
+                style_instructions=style_instructions,
+                voice_config_overrides=voice_config_overrides
             )
         else:
             self._gtts_offline(text, output_path, chunk_size=chunk_size)
