@@ -91,7 +91,7 @@ class ImageProcessor:
             footer_line_y = int(potential_footer_lines[0][0])
             logging.info(f"Footer line detected at y={footer_line_y}")
         else:
-            footer_line_y = int(0.9 * height)
+            footer_line_y = int(0.95 * height)
             logging.info("No strong footer line detected. Using default crop position.")
 
         crop_region = (0, 0, width, footer_line_y)
@@ -176,7 +176,7 @@ class ImageProcessor:
 
         # Process images with threading for better performance
         # Note: Be careful with rate limits when using threading with API calls
-        with ThreadPoolExecutor(max_workers=3) as executor:  # Reduced workers to respect rate limits
+        with ThreadPoolExecutor(max_workers=5) as executor:  # Reduced workers to respect rate limits
             results = list(executor.map(lambda img: self.extract_text_from_image(img, lang), image_files))
         
         # Join results with proper spacing

@@ -226,7 +226,7 @@ class TextToSpeech:
             logging.error(error_msg)
             return chunk_index, False, None, None, error_msg
 
-    def _google_tts(self, text, output_path, chunk_size=5000,
+    def _google_tts(self, text, output_path, chunk_size=7000,
                 model="gemini-2.5-flash-preview-tts", voice_name="Charon", 
                 style_instructions="Read with a natural storytelling tone, clear enunciation, and moderate pace. Emphasize sentence rhythm and end with subtle intonation shifts at periods and commas.", 
                 max_workers=3, max_retries=2, voice_config_overrides=None):
@@ -443,7 +443,7 @@ class TextToSpeech:
             logging.error(f"gTTS offline TTS failed: {e}")
             raise
 
-    def text_to_audio(self, text, output_path, chunk_size=5000, 
+    def text_to_audio(self, text, output_path, chunk_size=7000, 
                      max_workers=5, style_instructions=None, voice_config_overrides=None):
         """
         Convert text to speech using the selected TTS method with improved voice consistency.
