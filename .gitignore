@@ -1,8 +1,12 @@
 # Project-specific files and directories
+audio/
 images/
 *.mp3
-output.txt
-summary.txt
+*.wav
+*.txt
+!requirements.txt
+.VSCodeCounter/
+output.mp3.sfk
 .env
 *.pdf
 

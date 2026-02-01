@@ -91,7 +91,7 @@ class ImageProcessor:
             footer_line_y = int(potential_footer_lines[0][0])
             logging.info(f"Footer line detected at y={footer_line_y}")
         else:
-            footer_line_y = int(0.9 * height)
+            footer_line_y = int(0.95 * height)
             logging.info("No strong footer line detected. Using default crop position.")
 
         crop_region = (0, 0, width, footer_line_y)
@@ -137,7 +137,7 @@ class ImageProcessor:
 
             # Generate content with the image and prompt using the new API
             response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3-flash-preview",
                 contents=[
                     types.Content(parts=[
                         types.Part(text=prompt),
@@ -176,7 +176,7 @@ class ImageProcessor:
 
         # Process images with threading for better performance
         # Note: Be careful with rate limits when using threading with API calls
-        with ThreadPoolExecutor(max_workers=3) as executor:  # Reduced workers to respect rate limits
+        with ThreadPoolExecutor(max_workers=5) as executor:  # Reduced workers to respect rate limits
             results = list(executor.map(lambda img: self.extract_text_from_image(img, lang), image_files))
         
         # Join results with proper spacing
@@ -184,6 +184,32 @@ class ImageProcessor:
 
         end_time = time.time()
         logging.info(f"Execution time for extracting text from {len(image_files)} images: {end_time - start_time:.2f} seconds")
+
+        # Warn if text size exceeds TTS API daily limits
+        # With 100 requests/day and recommended 4000 bytes/chunk, max is 400,000 bytes
+        MAX_TTS_BYTES = 100 * 4000  # 400,000 bytes
+        text_bytes = len(text.encode('utf-8'))
+        if text_bytes > MAX_TTS_BYTES:
+            estimated_chunks = (text_bytes // 4000) + 1
+            logging.warning(
+                f"\n{'='*60}\n"
+                f"⚠️  TTS DAILY LIMIT WARNING\n"
+                f"{'='*60}\n"
+                f"\n📊 Extracted Text Statistics:\n"
+                f"   - Total text size: {text_bytes:,} bytes\n"
+                f"   - Maximum recommended: {MAX_TTS_BYTES:,} bytes\n"
+                f"   - Estimated TTS chunks (at 4000 bytes/chunk): {estimated_chunks}\n"
+                f"\n⚠️  Issue:\n"
+                f"   Your extracted text exceeds the recommended maximum for a single\n"
+                f"   TTS session. The Gemini TTS API allows ~100 requests per day.\n"
+                f"\n💡 Suggestions:\n"
+                f"   1. Split the text into smaller parts and convert over multiple days\n"
+                f"   2. Use larger chunk sizes (quality may decrease above 4000 bytes)\n"
+                f"   3. Extract fewer pages at a time\n"
+                f"{'='*60}\n"
+            )
+        else:
+            logging.info(f"📊 Text size: {text_bytes:,} bytes (within {MAX_TTS_BYTES:,} byte limit for TTS)")
 
         return text
 
